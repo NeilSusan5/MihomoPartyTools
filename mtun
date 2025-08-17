@@ -1,0 +1,1 @@
+sudo chown root:admin /Applications/Mihomo\ Party.app/Contents/Resources/sidecar/mihomo && sudo chmod +sx /Applications/Mihomo\ Party.app/Contents/Resources/sidecar/mihomo

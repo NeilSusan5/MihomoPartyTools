@@ -1,0 +1,147 @@
+#!/bin/zsh
+
+# 定义变量
+MIHOMO_PATH="/Applications/Mihomo Party.app/Contents/Resources/sidecar/mihomo-alpha"
+VERSION_URL="https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/version.txt"
+DOWNLOAD_URL_TEMPLATE="https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/mihomo-darwin-arm64-{VERSION}.gz"
+TMP_KERNEL_PATH="/tmp/mihomo-darwin-arm64-vernesong"
+BASE_KERNEL_URL="https://abcxxx.com/mihomo-darwin-arm64-vernesong"
+
+# --- 辅助函数 ---
+
+# 重启 Mihomo Party
+restart_mihomo() {
+    echo "正在重启 Mihomo Party..."
+    if pgrep -x "Mihomo Party" > /dev/null; then
+        osascript -e 'quit app "Mihomo Party"'
+        sleep 2
+    fi
+    open -a "Mihomo Party"
+}
+
+# --- 脚本主逻辑 ---
+
+# 0. 尝试获取当前内核版本
+echo "正在获取当前内核版本..."
+if [ -f "$MIHOMO_PATH" ]; then
+    CURRENT_VERSION=$("$MIHOMO_PATH" -v 2>&1 | awk '/Mihomo/{print $3; exit}')
+else
+    # 内核文件不存在，设置为空以触发修复
+    CURRENT_VERSION=""
+fi
+
+# 检查获取版本是否成功
+if [ -z "$CURRENT_VERSION" ]; then
+    echo "警告: 未找到内核或内核已损坏。"
+    # 将版本设置为空字符串，以触发后续的修复流程
+    CURRENT_VERSION=""
+fi
+echo "当前内核版本: ${CURRENT_VERSION:-'无法获取/不存在'}"
+
+# 3. 判断当前内核是否为官改版 (是否包含 'smart')
+if [[ "$CURRENT_VERSION" != *"smart"* ]]; then
+    echo "当前内核不是 'smart' 官改版或不存在，启动修复流程..."
+    
+    # 4a. 检查本地是否有缓存的官改内核
+    if [ -f "$TMP_KERNEL_PATH" ]; then
+        echo "发现本地缓存的官改内核，将进行替换..."
+        # 确保目录存在
+        sudo mkdir -p "$(dirname "$MIHOMO_PATH")"
+        sudo cp "$TMP_KERNEL_PATH" "$MIHOMO_PATH"
+        sudo chown root:admin "$MIHOMO_PATH"
+        sudo chmod +sx "$MIHOMO_PATH"
+        restart_mihomo
+        echo "已使用本地缓存的官改内核替换。等待10秒让程序重启..."
+        sleep 10
+        
+        # 替换后重新获取版本
+        echo "重新获取内核版本..."
+        CURRENT_VERSION=$("$MIHOMO_PATH" -v 2>&1 | awk '/Mihomo/{print $3; exit}')
+        echo "更新后内核版本: $CURRENT_VERSION"
+        if [[ "$CURRENT_VERSION" != *"smart"* ]]; then
+            echo "错误：替换为缓存的内核后，版本依然不是 'smart'。请检查缓存文件。脚本终止。"
+            exit 1
+        fi
+    else
+        # 4b. 没有缓存，下载基础内核作为跳板
+        echo "错误: 未发现本地缓存的 'smart' 内核。"
+        echo "将下载基础版 'smart' 内核作为最终后备方案..."
+        
+        # 关闭 Mihomo Party 以解除代理
+        if pgrep -x "Mihomo Party" > /dev/null; then
+            echo "正在关闭 Mihomo Party 以解除代理..."
+            osascript -e 'quit app "Mihomo Party"'
+            sleep 5
+        fi
+        
+        # 使用 --noproxy 强制直连下载基础内核
+        echo "正在下载基础内核..."
+        curl --noproxy '*' -L -o "$TMP_KERNEL_PATH" "$BASE_KERNEL_URL"
+        if [ $? -ne 0 ]; then echo "错误: 下载基础内核失败。"; exit 1; fi
+        
+        echo "已成功下载基础内核。"
+        chmod +x "$TMP_KERNEL_PATH"
+        
+        echo "正在用基础 'smart' 内核替换当前内核..."
+        # 确保目录存在
+        sudo mkdir -p "$(dirname "$MIHOMO_PATH")"
+        sudo cp "$TMP_KERNEL_PATH" "$MIHOMO_PATH"
+        if [ $? -ne 0 ]; then echo "错误: 复制内核失败,请检查sudo权限。"; exit 1; fi
+        
+        sudo chown root:admin "$MIHOMO_PATH"
+        sudo chmod +sx "$MIHOMO_PATH"
+        if [ $? -ne 0 ]; then echo "错误: 修改所有者或权限失败。"; exit 1; fi
+        
+        restart_mihomo
+        echo "已成功安装基础 'smart' 内核。等待10秒让程序重启..."
+        sleep 10
+
+        # 再次获取版本，为后续更新做准备
+        CURRENT_VERSION=$("$MIHOMO_PATH" -v 2>&1 | awk '/Mihomo/{print $3; exit}')
+        echo "当前内核已更新为基础版: $CURRENT_VERSION"
+    fi
+fi
+
+# --- 至此，可以保证当前运行的是 smart 内核 ---
+
+echo "当前内核为 'smart' 版，开始检查在线更新..."
+
+# 5. 获取最新官改版本号
+echo "正在获取最新官改版本号..."
+LATEST_VERSION=$(curl -sSL $VERSION_URL)
+if [ -z "$LATEST_VERSION" ]; then
+    echo "错误: 获取最新版本号失败。"
+    exit 1
+fi
+echo "最新官改版本号: $LATEST_VERSION"
+
+# 6. 比较版本
+if [ "$LATEST_VERSION" = "$CURRENT_VERSION" ]; then
+    echo "当前已是最新版本，无需更新。"
+    exit 0
+fi
+
+echo "发现新版本 ($LATEST_VERSION)，准备更新..."
+
+# 8 & 9. 下载最新内核
+echo "正在下载最新内核..."
+DOWNLOAD_URL=$(echo $DOWNLOAD_URL_TEMPLATE | sed "s/{VERSION}/$LATEST_VERSION/")
+curl --noproxy '*' -sSL -o "${TMP_KERNEL_PATH}.gz" "$DOWNLOAD_URL" && gunzip -f "${TMP_KERNEL_PATH}.gz"
+if [ $? -ne 0 ]; then echo "错误: 下载或解压新内核失败。"; exit 1; fi
+chmod +x "$TMP_KERNEL_PATH"
+
+# 10. 复制并替换内核
+echo "正在复制内核..."
+sudo cp "$TMP_KERNEL_PATH" "$MIHOMO_PATH"
+if [ $? -ne 0 ]; then echo "错误: 复制内核失败,请检查sudo权限。"; exit 1; fi
+
+# 11 & 12. 修改所有者和权限
+echo "正在修改所有者和权限..."
+sudo chown root:admin "$MIHOMO_PATH"
+sudo chmod +sx "$MIHOMO_PATH"
+if [ $? -ne 0 ]; then echo "错误: 修改所有者或权限失败。"; exit 1; fi
+
+# 13. 重启 Mihomo Party
+restart_mihomo
+
+echo "Mihomo Party 内核更新成功！"
