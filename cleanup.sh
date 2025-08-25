@@ -13,4 +13,4 @@ fi
 echo "正在从 $LOG_DIR 删除 .log 文件..."
 find "$LOG_DIR" -name "*.log" -type f -delete
 
-echo "清理完成。"
+echo "清理完成，操作用户: $(whoami)。"
